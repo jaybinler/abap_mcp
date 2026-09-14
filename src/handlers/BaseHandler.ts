@@ -329,13 +329,13 @@ export abstract class BaseHandler {
           try { await this.adtclient.dropSession(); } catch (_) {}
           this.adtclient.stateful = session_types.stateful;
           await this.adtclient.login();
-          return await fn();
+
         } catch (loginError: any) {
           // One more attempt after a short pause (handles transient network blips)
           await new Promise(r => setTimeout(r, 1500));
           try {
             await this.adtclient.login();
-            return await fn();
+
           } catch (finalError: any) {
             throw new McpError(
               ErrorCode.InternalError,
@@ -344,8 +344,10 @@ export abstract class BaseHandler {
           }
         }
       }
-      throw error;
+      if (!info.isSessionTimeout) throw error;
     }
+    // Replay once outside the login catch: preserve business errors without retrying.
+    return await fn();
   }
 
   protected success(data: Record<string, any>) {

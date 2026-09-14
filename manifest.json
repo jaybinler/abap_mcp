@@ -1,8 +1,8 @@
 {
   "manifest_version": "0.2",
   "name": "dassian-adt",
-  "version": "2.0.0",
-  "display_name": "Dassian ADT — SAP ABAP Development",
+  "version": "2.0.1",
+  "display_name": "Dassian ADT 闁?SAP ABAP Development",
   "description": "Connect Claude to SAP systems via ADT API. Read, write, test, and deploy ABAP code without SAP GUI.",
   "author": {
     "name": "Dassian Inc.",
@@ -18,7 +18,12 @@
         "${__dirname}/dist/index.js"
       ],
       "env": {
-        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0",
+        "SAP_URL": "${user_config.SAP_URL}",
+        "SAP_USER": "${user_config.SAP_USER}",
+        "SAP_PASSWORD": "${user_config.SAP_PASSWORD}",
+        "SAP_CLIENT": "${user_config.SAP_CLIENT}",
+        "SAP_LANGUAGE": "${user_config.SAP_LANGUAGE}"
       }
     }
   },
@@ -56,24 +61,353 @@
     }
   },
   "tools": [
-    { "name": "abap_get_source", "description": "Read ABAP source code" },
-    { "name": "abap_get_class_include", "description": "Read ABAP class include source code" },
-    { "name": "abap_set_source", "description": "Write ABAP source code" },
-    { "name": "abap_create", "description": "Create ABAP objects" },
-    { "name": "abap_delete", "description": "Delete ABAP objects" },
-    { "name": "abap_activate", "description": "Activate ABAP objects" },
-    { "name": "abap_search", "description": "Search for ABAP objects" },
-    { "name": "abap_run", "description": "Run ABAP code and capture output" },
-    { "name": "abap_table", "description": "Read SAP tables and CDS views" },
-    { "name": "abap_query", "description": "Execute SQL queries" },
-    { "name": "transport_create", "description": "Create transport requests" },
-    { "name": "transport_release", "description": "Release transports" },
-    { "name": "abap_syntax_check", "description": "Check ABAP syntax" },
-    { "name": "abap_atc_run", "description": "Run ATC quality checks" },
-    { "name": "bsp_read_file", "description": "Read/list files in a BSP / UI5 application" }
+    {
+      "name": "bsp_read_file",
+      "description": "Read a file from a BSP / UI5 application repository, or list all files in the application. Uses the SAP ADT filestore endpoint (/sap/bc/adt/filestore/ui5-bsp). Without file_path: returns a list of all files in the app. With file_path: returns the raw content of that file (e.g. webapp/manifest.json). Use this to read manifest.json for component IDs, OData service URIs, and dependency info."
+    },
+    {
+      "name": "bsp_search_content",
+      "description": "Search for a string inside the text files of a BSP / UI5 application. Lists all files in the app, reads each text file (.json, .js, .xml, .html, .css, .properties, etc.), and returns the file paths that contain the search string. This is the primary way to find which BSP file contains a specific component ID, OData service name, or any other string — without needing to know the file name in advance."
+    },
+    {
+      "name": "ui5_app_index_lookup",
+      "description": "Look up UI5 application metadata from the SAP UI5 Application Index (/UI5/APPIDX). The app index is maintained by /UI5/APP_INDEX_CALCULATE and stores parsed manifest.json metadata: component ID, BSP application name, libraries, last updated timestamp. Faster than reading manifest.json directly — use this to find which BSP app owns a component ID, or to enumerate all UI5 apps on the system."
+    },
+    {
+      "name": "abap_query",
+      "description": "Execute a SQL query against the SAP database via ADT. Use OpenSQL syntax (FROM clause, WHERE, ORDER BY). For complex data investigations, prefer abap_run which gives full ABAP logic. NOTE: \"Invalid query string. Only SELECT statement is allowed.\" errors come from the SAP ADT endpoint itself — not from client-side validation. This can occur for tables with special characters in names (e.g. /UI5/FILE), cluster tables, or views not accessible via the datapreview endpoint. In these cases, use abap_run with a SELECT INTO TABLE statement instead."
+    },
+    {
+      "name": "abap_table",
+      "description": "Read contents of an ABAP table or CDS view. Supports an optional WHERE clause including LIKE, BETWEEN, and comparisons. For multi-table joins or subqueries, use abap_query instead."
+    },
+    {
+      "name": "ddic_element",
+      "description": "Retrieve DDIC metadata for a CDS view or data element — field names, data types, key flags, data element labels, lengths, decimals, and CDS annotations. Pass the CDS entity path (e.g. /DSN/C_MY_VIEW or SEPM_I_PRODUCT_E). For associations, set getTargetForAssociation=true to resolve the target entity's fields. For extension views, set getExtensionViews=true."
+    },
+    {
+      "name": "ddic_references",
+      "description": "List all DDIC objects that reference a given CDS entity or data element. Returns each referencing object's URI, type, name, and path. Useful for understanding the impact of changing a data model."
+    },
+    {
+      "name": "debuggerListeners",
+      "description": "List existing debugger listeners (terminals registered for debugging) for a user. Use to check whether a debug terminal is already registered before calling debuggerListen."
+    },
+    {
+      "name": "debuggerListen",
+      "description": "Register this terminal as a debug listener for a user. When the user next triggers a debuggable process (e.g. /h or a breakpoint hit in their SAP GUI session), this call returns the Debuggee (session info needed for debuggerAttach). NOTE: this call blocks until a debuggee appears or the request times out — only call it after breakpoints are set and the user is ready to trigger the process."
+    },
+    {
+      "name": "debuggerDeleteListener",
+      "description": "Unregister a debug listener previously created with debuggerListen. Call this to clean up when a debugging session is finished."
+    },
+    {
+      "name": "debuggerSetBreakpoints",
+      "description": "Set breakpoints for a user. Each entry is either a DebugBreakpoint object (round-trip from a previous call, supports a \"condition\") or a source URI string. Returns the created breakpoints (keep them for debuggerDeleteBreakpoints)."
+    },
+    {
+      "name": "debuggerDeleteBreakpoints",
+      "description": "Delete breakpoints previously created with debuggerSetBreakpoints. Pass one of the breakpoint objects returned by that call."
+    },
+    {
+      "name": "debuggerAttach",
+      "description": "Attach the debugger to a debuggee returned by debuggerListen. This starts the actual debug session on this connection — afterwards use debuggerStackTrace, debuggerVariables and debuggerStep to control it."
+    },
+    {
+      "name": "debuggerSaveSettings",
+      "description": "Save debugger settings (e.g. default settings for the debug session). Returns the effective settings."
+    },
+    {
+      "name": "debuggerStackTrace",
+      "description": "Get the call stack of the attached debug session. Requires debuggerAttach first. Each frame shows type, name, URI and line — use the frame position or URI with debuggerGoToStack."
+    },
+    {
+      "name": "debuggerVariables",
+      "description": "Get the variables visible in the current stack frame of the attached debug session. For structured variables, follow up with debuggerChildVariables using the returned parent name."
+    },
+    {
+      "name": "debuggerChildVariables",
+      "description": "Get the child variables of a structured variable in the debug session (e.g. components of a structure, rows of a table)."
+    },
+    {
+      "name": "debuggerStep",
+      "description": "Step the attached debug session: stepInto, stepOver, stepReturn, stepContinue, or terminateDebuggee. stepRunToLine / stepJumpToLine additionally require the target source url."
+    },
+    {
+      "name": "debuggerGoToStack",
+      "description": "Switch the debug session to another stack frame (by frame position number or frame URI). Afterwards debuggerVariables shows that frame's variables."
+    },
+    {
+      "name": "debuggerSetVariableValue",
+      "description": "Change the value of a variable in the current frame of the attached debug session. Value is passed as its external (string) representation. Returns the new value."
+    },
+    {
+      "name": "git_repos",
+      "description": "List all gCTS repositories registered on this SAP system."
+    },
+    {
+      "name": "git_pull",
+      "description": "Pull from a gCTS repository, importing commits into the SAP system. Used in the cherry-pick pipeline to import transports across systems."
+    },
+    {
+      "name": "abap_create",
+      "description": "Create a new ABAP object. For temporary objects use package=$TMP — no transport needed. For permanent objects, provide both a named package and transport. After creation, write source with abap_set_source and activate with abap_activate. BDEF (behavior definition) is supported — activation order is DDLS → BDEF → behavior pool class."
+    },
+    {
+      "name": "abap_delete",
+      "description": "Delete an ABAP object. Locks the object, deletes it, and the lock is released implicitly by the delete. For objects in a transport, provide the transport number."
+    },
+    {
+      "name": "abap_activate",
+      "description": "Activate an ABAP object, making it the active version. Must be called after abap_set_source or abap_create. Returns success:true with empty messages if clean. Returns success:false with error messages if activation fails — read them, fix the source, and retry. For FUGR/FF (function modules): activation always targets the parent function group — provide fugr param. For PROG/I (includes): activation always targets the parent program — provide parent param."
+    },
+    {
+      "name": "abap_search",
+      "description": "Search for ABAP objects by name pattern. Returns object names, types, and ADT URLs. IMPORTANT: Only TRAILING wildcards work. Use \"/DSN/BIL*\" not \"/DSN/*BIL*\". Leading wildcards (*SOMETHING) and mid-name wildcards (/DSN/*FOO*BAR*) will fail. If you need to find an object by partial name, put the known prefix first: /DSN/BIL*."
+    },
+    {
+      "name": "abap_activate_batch",
+      "description": "Activate multiple ABAP objects in a single ADT request. More efficient than calling abap_activate repeatedly for each object. Returns activated:true if all objects activated cleanly, or activated:false with error messages if any failed. Use this after writing source for several objects at once (e.g. after a set of transport_assign calls)."
+    },
+    {
+      "name": "abap_object_info",
+      "description": "Get metadata for an ABAP object: package, transport layer, active/inactive status, upgrade flag (upgradeFlag=true means object is in SPAU adjustment mode and cannot be edited via ADT), and structural information. Use this before attempting to edit an object you are unfamiliar with."
+    },
+    {
+      "name": "abap_syntax_check",
+      "description": "Run a syntax check on an ABAP object. Returns errors and warnings. Use this after writing source to verify correctness before activating. Supports all types including FUGR/FF (function modules)."
+    },
+    {
+      "name": "abap_atc_run",
+      "description": "Run ABAP Test Cockpit (ATC) checks on an object. Returns findings grouped by severity (error, warning, info). Clean core compliance issues appear here. The response includes worklistId and variantWarning — if variantWarning is set, SAP silently fell back to DEFAULT (variant name did not match SATC configuration). Use abap_atc_variants to see what the system reports as its configured properties."
+    },
+    {
+      "name": "abap_atc_variants",
+      "description": "Return ATC system customizing (configured properties and exemption kinds). Use this to diagnose ATC variant issues. Note: SAP does not expose a standard endpoint to list all variant names — variant names must be checked in SATC transaction on the SAP system. This tool also probes whether \"DEFAULT\" and a given variant resolve to the same worklist ID (silent fallback detection)."
+    },
+    {
+      "name": "abap_where_used",
+      "description": "Find all references to an ABAP object (where-used list). Returns every object that references the target, with object name, type, package, and description. Equivalent to Ctrl+Shift+G in Eclipse ADT or SE12 where-used in SAP GUI. Use this before deleting or modifying objects to understand the impact. For class methods use type CLAS/OM with name=\"CLASS_NAME::METHOD_NAME\" (e.g. \"/DSN/MY_CLASS::GET_CONT\") or pass name=class and method=method_name separately."
+    },
+    {
+      "name": "abap_find_definition",
+      "description": "Jump to the definition of an ABAP symbol at a specific cursor position in source code. Requires a source object (name+type) AND the exact line/column where the symbol appears — NOT an object name lookup. First call abap_get_source to read the code and locate the symbol, then pass those coordinates here. Equivalent to F3 / Ctrl+Click in Eclipse ADT."
+    },
+    {
+      "name": "abap_fix_proposals",
+      "description": "Get ADT quick-fix proposals for a syntax error at a specific position. Workflow: run abap_syntax_check → get error line/column → call this tool → apply the chosen fix with abap_write. Returns a list of proposed fixes with descriptions and the exact source changes to apply."
+    },
+    {
+      "name": "rap_binding_details",
+      "description": "Get the service binding details for a published OData service binding. Returns the service URL, entity sets, navigation properties, and annotation URL. Use after rap_publish_binding or to inspect an existing published binding. For bindings with multiple services, use index to select which service (default: 0)."
+    },
+    {
+      "name": "rap_publish_binding",
+      "description": "Publish or unpublish an OData service binding on the SAP system. Publishing generates the service URL and makes it accessible for consumption. Use after creating or updating a SRVB (service binding) object. Returns the SAP response message indicating success or any issues."
+    },
+    {
+      "name": "renameEvaluate",
+      "description": "Evaluate a rename refactoring at a cursor position: returns a RenameRefactoringProposal describing the symbol and proposed new name. Pass the proposal to renamePreview. uri is the object source URL (…/source/main); line/column locate the symbol (1-based line)."
+    },
+    {
+      "name": "renamePreview",
+      "description": "Preview a rename refactoring: pass the proposal from renameEvaluate (optionally change its new name first) and a transport number. Returns the RenameRefactoring with all affected objects and their deltas. Pass that result to renameExecute to apply."
+    },
+    {
+      "name": "renameExecute",
+      "description": "Execute a rename refactoring: pass the RenameRefactoring returned by renamePreview. Renames the symbol across ALL affected objects (where-used) in one atomic operation."
+    },
+    {
+      "name": "extractMethodEvaluate",
+      "description": "Evaluate an extract-method refactoring for a source range: returns an ExtractMethodProposal. uri is the object source URL (…/source/main); range is {\"start\":{\"line\":N,\"column\":N},\"end\":{\"line\":N,\"column\":N}}."
+    },
+    {
+      "name": "extractMethodPreview",
+      "description": "Preview an extract-method refactoring: pass the proposal from extractMethodEvaluate. Returns the GenericRefactoring showing the new method and the replaced call site. Pass that result to extractMethodExecute to apply."
+    },
+    {
+      "name": "extractMethodExecute",
+      "description": "Execute an extract-method refactoring: pass the GenericRefactoring returned by extractMethodPreview. Creates the new method and replaces the selected range with a call to it."
+    },
+    {
+      "name": "abap_rfc_call",
+      "description": "Call an RFC-enabled function module on the SAP system directly via SAP NW RFC protocol. Uses Python pyrfc library to establish an RFC connection and call the function module. Supports IMPORT parameters (scalars) and TABLE parameters (internal tables). Returns the function module output including EXPORT and TABLE parameters. Connection parameters are auto-detected from the MCP server configuration."
+    },
+    {
+      "name": "abap_ddic_create",
+      "description": "Create a DDIC structure or table on the SAP system via RFC. Calls function module ZFM_DDIC_CREATE which uses DDIF_TABL_PUT and DDIF_TABL_ACTIVATE. Automatically derives DATATYPE, LENG, DECIMALS from data elements (ROLLNAME). Creates DD02T entries for both the specified language and system language (1). Requires ZFM_DDIC_CREATE to be installed and RFC-enabled on the target system."
+    },
+    {
+      "name": "abap_unlock",
+      "description": "Release the ABAP enqueue lock (SM12) for an object. Use when abap_set_source or abap_edit_method fails because a previous MCP operation crashed before unlocking. Calls the appropriate DEQUEUE FM. Only affects locks held by the current SAP user. LIMITATION: clears the enqueue lock (SM12) only — NOT the ICM HTTP session lock. If the object is still blocked after this, a stale ICM session holds the ADT lock: kill it in SM04 (delete work process entries for this user showing the ADT class path). Supported types: CLAS, INTF, PROG, FUGR."
+    },
+    {
+      "name": "abap_run",
+      "description": "Create a temporary ABAP class in $TMP, run it via IF_OO_ADT_CLASSRUN, capture output, then delete it. This is the standard pattern for querying live SAP data or executing one-off ABAP logic. Provide only the body of the run method — the class wrapper is generated automatically. Use out->write() to produce output. IMPORTANT: Declare variables with DATA before SELECT. Use \"SELECT * FROM table INTO TABLE lt WHERE ...\" (old-style, no inline @DATA) — inline declarations with UP TO N ROWS do not work inside this method. To limit rows, use \"DELETE lt FROM N.\" after the SELECT. LARGE OUTPUT: When the method produces more than 60 000 characters, output is automatically split into pages. The first page is returned with run_id, total_pages, and has_more=true. Use abap_fetch_page(run_id, page) to retrieve subsequent pages (retained for 30 minutes). If the class name already exists from a previous failed run it is deleted and retried automatically. KNOWN LIMITATION: HTTP calls from within abap_run code to http://localhost/... will fail with ICMECONNREFUSED — the ABAP process cannot reach the ICM listener via loopback. Use CL_HTTP_CLIENT=>CREATE_BY_DESTINATION with a configured RFC destination instead, or use the dedicated bsp_read_file / bsp_search_content tools to read BSP/UI5 file content."
+    },
+    {
+      "name": "abap_fetch_page",
+      "description": "Retrieve a subsequent page of output from a large abap_run result. When abap_run output exceeds 60 000 characters it is automatically split into pages. The first page is returned inline with the run result along with a run_id and total_pages. Call abap_fetch_page with that run_id and the desired page number to retrieve additional pages. Pages are retained for 30 minutes after the run."
+    },
+    {
+      "name": "abap_get_source",
+      "description": "Get the ABAP source code for any object by name and type. NOT for TABL or STRU — those are DDIC objects with no source; use abap_table instead. No URL construction needed — just provide the object name and type. Supported types: BDEF, CLAS, DCLS, DDLS, DDLX, DEVC, DOMA, DTEL, ENHO, ENHS, FUGR, INTF, MSAG, PROG, SHLP, SQLT, SRVB, SRVD, STRU, TABL, TTYP, VIEW. For namespaced objects pass the raw name including slashes, e.g. /DSN/MY_CLASS. For large classes, use compact=true to get only the CLASS DEFINITION (method signatures, no bodies) — 10-30x smaller."
+    },
+    {
+      "name": "abap_set_source",
+      "description": "Write ABAP source code for an object. Handles lock → write → unlock automatically. For objects outside $TMP, provide a transport number. PREFER abap_edit_method when changing one method of an existing class — it edits surgically without regenerating (and risking clobbering) the rest of the source. IMPORTANT: After writing source, call abap_activate to make it active."
+    },
+    {
+      "name": "abap_edit_method",
+      "description": "Surgically edit a single method inside an ABAP class without touching the rest of the source. Finds the method boundaries, does a find/replace scoped only to that method body, runs a syntax check on the reconstructed source, and writes it back. Searches the main class source first, then the implementations (CCIMP) and testclasses (CCAU) includes — so RAP behavior pool (BP_*) handler methods and local test methods are found automatically. Much safer than abap_set_source for targeted fixes — no risk of clobbering other methods. After success, call abap_activate to activate the change."
+    },
+    {
+      "name": "abap_set_class_include",
+      "description": "Write source to a specific include of an ABAP class (implementations, definitions, macros, testclasses). Use this instead of raw_http lock/PUT/unlock sequences — those break because each raw_http call gets a fresh ICM session, making the lock handle invalid for the write. This tool handles lock → write → unlock atomically on one session. After writing, call abap_activate(name, CLAS) to activate."
+    },
+    {
+      "name": "abap_get_class_include",
+      "description": "Read source from a specific include of an ABAP class (implementations, definitions, macros, testclasses). Use this for class-local implementation includes such as CCIMP behavior handler bodies, which are not standalone PROG/I includes."
+    },
+    {
+      "name": "abap_pretty_print",
+      "description": "Format ABAP source code using the SAP Pretty Printer. Returns the formatted source. Does not write back to the system — pass the result to abap_set_source if needed."
+    },
+    {
+      "name": "abap_revisions",
+      "description": "Get the revision history for an ABAP object (transport-based change log). Returns revisions with date, author, transport number (version), and version title. For classes, optionally specify a class include to see its revision history separately."
+    },
+    {
+      "name": "abap_get_function_group",
+      "description": "Get all source for a function group in one call: top include, all user includes (U01..UXX), and all function module sources. Returns a map of include/FM name → source. Use this instead of multiple abap_get_source calls when you need to understand or search a whole function group."
+    },
+    {
+      "name": "login",
+      "description": "Establish a stateful session with the SAP system. Most tools call this automatically via withSession() — you only need to call login() explicitly before abap_run (which requires a fresh session for the classrun endpoint)."
+    },
+    {
+      "name": "healthcheck",
+      "description": "Verify connectivity to the SAP system. Returns system ID, login status, and SAP_BASIS version. Use this to check if the system is a legacy SAP_BASIS 731 (ECC 6.0) system."
+    },
+    {
+      "name": "abap_get_dump",
+      "description": "Retrieve recent ABAP short dumps (ST22). Returns dump list with error text, program, and timestamp. Use after a failed abap_run or to investigate customer-reported short dumps. Optionally filter by a search query (e.g. program name or error class)."
+    },
+    {
+      "name": "abap_inactive_objects",
+      "description": "List all objects with inactive versions (objects that have been modified but not yet activated). Returns each inactive object with its type, name, and user. Use before abap_activate to see what needs to be activated."
+    },
+    {
+      "name": "abap_annotation_defs",
+      "description": "Retrieve all CDS annotation definitions available on this SAP system. Returns the raw XML containing annotation names, types, and allowed values. Useful when writing CDS views to discover valid annotations and their structure."
+    },
+    {
+      "name": "raw_http",
+      "description": "Execute a raw HTTP request to the SAP ADT API. Use this for operations not covered by other tools — specifically: (1) SITO objects (require Content-Type: application/json for source writes), (2) SICF path management, (3) Any ADT endpoint not exposed as a dedicated tool. NOTE: BSP/UI5 filestore paths (/sap/bc/adt/filestore/ui5-bsp/...) are NOT accessible via raw_http — use the dedicated bsp_read_file and bsp_search_content tools for reading BSP application files. For SITO source writes: method=PUT, path=/sap/bc/adt/ddls/SITO_NAME/source/main?lockHandle=LOCK, contentType=application/json, body=<JSON source>. HARD RULE — NEVER use raw_http to POST to lock endpoints (?method=adtLock) or attempt to acquire, probe, or release locks via raw_http. Even a failed lock POST leaves a stale ICM session lock with no matching handle on our side, causing every subsequent abap_set_source to fail with \"locked by another\" until the user manually kills sessions in SM04. raw_http also CANNOT be used for any stateful multi-step sequence (lock → write → unlock): each call may get a different ICM session, making lock handles invalid for subsequent calls. Use abap_set_source, abap_set_class_include, or abap_edit_method for any write operation."
+    },
+    {
+      "name": "abap_create_test_include",
+      "description": "Scaffold a test class include (CCAU) for an existing ABAP class. Creates the test include if it does not already exist, preparing the class for ABAP Unit tests. After creation, use abap_set_class_include(include_type=\"testclasses\") to write your test code."
+    },
+    {
+      "name": "abap_unit_test",
+      "description": "Run ABAP Unit tests for an object and return pass/fail results. Returns a summary (total/passed/failed/errors) plus per-method detail for failures. Failed tests include the assertion message, details, and stack trace with source locations. Supports classes (CLAS) and programs (PROG/P) that contain local test classes."
+    },
+    {
+      "name": "traces_list",
+      "description": "List ABAP runtime trace runs stored on the system. Returns each trace run with ID, title, author, timing breakdown (ABAP / system / DB), object name, and state. Use the ID with traces_hit_list, traces_statements, or traces_db_access to drill into a specific run."
+    },
+    {
+      "name": "traces_set_parameters",
+      "description": "Configure trace collection parameters and return a parametersId. The parametersId is required by traces_create_config. Sensible defaults are applied — only override if you need specific trace granularity."
+    },
+    {
+      "name": "traces_create_config",
+      "description": "Create a trace configuration that captures the next execution of a user's request. First call traces_set_parameters to get a parametersId. The trace activates when the target user next runs the specified transaction, URL, report, or FM. Returns the configuration ID."
+    },
+    {
+      "name": "traces_hit_list",
+      "description": "Get the hit list (call frequency / gross time breakdown) for a trace run. Shows the most expensive program units ranked by gross time and hit count. Use the trace ID from traces_list."
+    },
+    {
+      "name": "traces_statements",
+      "description": "Get individual ABAP statement execution details for a trace run. Returns statement-level timing with calling program context. Use the trace ID from traces_list."
+    },
+    {
+      "name": "traces_db_access",
+      "description": "Get database access statistics for a trace run. Shows tables accessed, statement types (SELECT/INSERT/UPDATE), access counts, and timing. Use to identify N+1 query patterns and expensive DB operations."
+    },
+    {
+      "name": "traces_delete",
+      "description": "Delete a trace run result. The trace configuration is not affected."
+    },
+    {
+      "name": "traces_delete_config",
+      "description": "Delete a trace configuration (stops future captures)."
+    },
+    {
+      "name": "transport_create",
+      "description": "Create a new transport request. Returns the transport request number (e.g. D23K900123). WORKBENCH (default): creates request + classified Correction task — anchor object required, pass the TASK number to abap_set_source/transport_assign. TOC (transportType=\"toc\"): creates a Transport of Copies via FM TR_INSERT_NEW_COMM — no child task, no anchor object required, requires targetSystem (e.g. \"C23\", \"VD3\"). Use transport_bundle_into_toc to copy E071 rows from source transports into the ToC."
+    },
+    {
+      "name": "transport_check",
+      "description": "Check transport requirements for an object before creation/modification. Returns whether a transport is needed and lists available transport requests. Use this before creating objects in non-$TMP packages."
+    },
+    {
+      "name": "transport_assign",
+      "description": "Assign an existing object to a transport request via no-op save (lock → read source → write same source with transport number → unlock). The source is not changed — only the transport linkage is created. Call abap_activate after assigning if the object is not yet active."
+    },
+    {
+      "name": "transport_release",
+      "description": "Release a transport request. Automatically releases child tasks first, then the parent request. Performs a pre-release check for inactive objects — if any objects in the transport are inactive, release would hang at the SAP backend (the agent sees \"operation timed out\" with no useful detail). When inactive objects are detected, fail-fast with the list. Pass autoActivate=true to activate them automatically before releasing. WARNING: Irreversible. Only call when explicitly asked to release. NEVER call automatically after activation — always wait for explicit instruction."
+    },
+    {
+      "name": "transport_list",
+      "description": "List open transport requests for a user. Defaults to the current session user."
+    },
+    {
+      "name": "transport_info",
+      "description": "Get the current transport assignment for an object."
+    },
+    {
+      "name": "transport_delete",
+      "description": "Delete a transport request. WARNING: Irreversible. Only works on modifiable (not yet released) requests. Only call when explicitly requested."
+    },
+    {
+      "name": "transport_set_owner",
+      "description": "Change the owner of a transport request. Returns the updated transport header."
+    },
+    {
+      "name": "transport_add_user",
+      "description": "Add a user to a transport request (gives them edit access). Returns the updated user list."
+    },
+    {
+      "name": "transport_contents",
+      "description": "List all objects on a transport request (E071). Returns the PGMID, object type, and object name for every entry. Use this to audit what will be released or to verify an object was captured."
+    },
+    {
+      "name": "transport_set_description",
+      "description": "Change the description of a transport request. Returns the updated transport header."
+    },
+    {
+      "name": "transport_log",
+      "description": "Read the CTS import/activation log for a transport on a specific system. Returns the raw log showing programs generated/activated, syntax errors, return codes, and timestamps for every import run of that transport. IMPORTANT: call this on the system where the log lives — e.g. sap_system_id=c22 to read C22 logs, sap_system_id=d25 for D25 GT5K* transports. The \"system\" parameter is the SAP system name that appears in the log filename (e.g. \"C22\", \"D25\"). Common acttypes — try in this order if one returns nothing: \"G\" (default) = ABAP generation, \"A\" = activation, \"I\" = main import, \"J\" = DDIC activation, \"H\" = ABAP Dictionary import, \"R\" = after-import methods/XPRAs, \"B\" = inactive import, \"<\" = forward to follow-on system. The acttype letter replaces position 4 of the transport number in the log filename (e.g. GT5K… → GT5A… for acttype A)."
+    },
+    {
+      "name": "transport_find",
+      "description": "Search for transport requests by description fragment. Queries E07T on the connected system — use the target system (e.g. sap_system_id=d25) to find GT5K* transports created there by gCTS, or sap_system_id=x22 to find source transports. Useful for locating the GT5K transport number that corresponds to a GitHub issue or Jira key."
+    },
+    {
+      "name": "transport_bundle_into_toc",
+      "description": "Copy the object contents (E071/E071K rows) of one or more source transports into an existing Transport of Copies (ToC). The source transports are NOT modified — the ToC ends up with duplicate E071 rows referencing the same objects, which is the deliverable snapshot pattern used for point fixes. The ToC must already exist (create it with transport_create transportType=\"toc\") and must be in modifiable state (TRSTATUS=D). Drives standard FM TR_COPY_COMM in a loop."
+    }
   ],
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=18.0.0"
     }

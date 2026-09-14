@@ -150,10 +150,10 @@ function log(level: LogLevel, name: string, message: string, meta?: Record<strin
       console.warn(logString);
       break;
     case 'info':
-      console.info(logString);
+      console.error(logString);
       break;
     case 'debug':
-      console.debug(logString);
+      console.error(logString);
       break;
   }
 }

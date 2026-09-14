@@ -244,7 +244,7 @@ export class AbapAdtServer extends Server {
 
   constructor(resolved: [AuthConfig[], string]) {
     super(
-      { name: 'dassian-adt', version: '2.0.0' },
+      { name: 'dassian-adt', version: '2.0.1' },
       { capabilities: { tools: {}, logging: {}, prompts: {} } }
     );
 
@@ -386,7 +386,7 @@ export class AbapAdtServer extends Server {
     const transport = new StdioServerTransport();
     await this.connect(transport);
     const systemIds = [...this.systems.keys()];
-    console.error(`dassian-adt v2.0 running on stdio — ${systemIds.length} system(s): ${systemIds.join(', ')}`);
+    console.error(`dassian-adt v2.0.1 running on stdio — ${systemIds.length} system(s): ${systemIds.join(', ')}`);
     console.error(`Default system: ${this.defaultSystemId}`);
     console.error('Client capabilities:', JSON.stringify(this.getClientCapabilities(), null, 2));
 
@@ -602,7 +602,7 @@ async function runHttp() {
   }
 
   const systemIds = authConfigs.map(a => a.id);
-  console.error(`dassian-adt v2.0 HTTP mode (${authMode}) — ${systemTemplates.length} system(s): ${systemTemplates.map(t => t.id).join(', ')}`);
+  console.error(`dassian-adt v2.0.1 HTTP mode (${authMode}) — ${systemTemplates.length} system(s): ${systemTemplates.map(t => t.id).join(', ')}`);
   if (defaultId) console.error(`Default system: ${defaultId}`);
 
   const sessions = new Map<string, HttpSession>();
