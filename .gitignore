@@ -1,0 +1,14 @@
+.env
+dist
+node_modules
+coverage
+*.code-workspace
+TEST_RESULTS*.md
+sap-systems.json
+dev_rfc.log
+rfc-proxy/dev_rfc.log
+rfc-proxy/config.json
+__pycache__/
+*.zip
+docs/brainstorming
+dist.bak-*/

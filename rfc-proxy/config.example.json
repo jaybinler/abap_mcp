@@ -1,0 +1,31 @@
+{
+  "default_server": "DEV",
+  "servers": {
+    "DEV": {
+      "description": "开发系统",
+      "rfc": {
+        "ashost": "dev-sap.example.com",
+        "sysnr": "00",
+        "client": "100",
+        "user": "YOUR_USER",
+        "passwd": "YOUR_PASSWORD",
+        "lang": "EN"
+      }
+    },
+    "QAS": {
+      "description": "测试系统",
+      "rfc": {
+        "ashost": "qas-sap.example.com",
+        "sysnr": "00",
+        "client": "100",
+        "user": "YOUR_USER",
+        "passwd": "YOUR_PASSWORD",
+        "lang": "EN"
+      }
+    }
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5101
+  }
+}

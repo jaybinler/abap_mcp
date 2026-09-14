@@ -1,0 +1,254 @@
+/**
+ * SAP ADT error parsing.
+ * The ADT API returns errors in several formats — this extracts the human-readable message
+ * and detects specific conditions (upgrade mode, session timeout) that need special handling.
+ */
+
+export interface AdtErrorInfo {
+  message: string;
+  isSessionTimeout: boolean;
+  isUpgradeMode: boolean;
+  isLocked: boolean;
+  isNotFound: boolean;
+  /** True when a 400 has no meaningful body — typically a stale CSRF token or expired session. */
+  isAmbiguous400: boolean;
+  /** True when lock returns 405 — DDIC types (DDLS, DDLX, TABL) use internal enqueue, not ADT HTTP locks. */
+  isLockNotSupported: boolean;
+  httpStatus?: number;
+}
+
+export function parseAdtError(error: any): AdtErrorInfo {
+  // Extract message from various error shapes
+  // The abap-adt-api library wraps responses as {body, status, headers} (not axios's {data}).
+  // Check both .data (axios shape) and .body (library shape) so SAP error bodies surface correctly.
+  let rawMessage: string =
+    error?.response?.data?.message ||
+    error?.response?.data?.['message'] ||
+    (typeof error?.response?.data === 'string' ? error.response.data : '') ||
+    (typeof error?.response?.body === 'string' ? error.response.body : '') ||
+    error?.message ||
+    'Unknown error';
+
+  // AdtErrorException from the library carries extra context that SAP returned alongside
+  // the generic message (e.g. when message is just "An exception was raised", the localizedMessage
+  // and properties bag often contain the actual reason). Append them if present.
+  const localized: string = error?.localizedMessage || '';
+  const propsBag = error?.properties || {};
+  const propStr: string = Object.keys(propsBag).length
+    ? Object.entries(propsBag).map(([k, v]) => `${k}=${v}`).join('; ')
+    : '';
+  if (localized && !rawMessage.includes(localized)) {
+    rawMessage = `${rawMessage} — ${localized}`;
+  }
+  if (propStr) {
+    rawMessage = `${rawMessage} [${propStr}]`;
+  }
+
+  // SAP ADT returns "I::000" (or similar X::NNN format) when the ADT resource URL is wrong
+  // for the object type — typically means "container object has no source endpoint" or "wrong path".
+  if (/^[A-Z]+::\d+$/.test(rawMessage.trim())) {
+    rawMessage = `SAP ADT returned opaque error code "${rawMessage.trim()}" — this usually means the URL path is wrong for this object type. ` +
+      `If you requested source for a FUGR/F (function group), note that function groups are containers with no direct source — ` +
+      `use FUGR/I for includes or FUGR/FF for function modules instead.`;
+  }
+
+  // SAP rejects writes to system-generated L-prefix includes with this message.
+  // The real issue is that you're trying to write to the generated include instead of the FM endpoint.
+  if (
+    rawMessage.includes('This syntax cannot be used for an object name') ||
+    rawMessage.includes('syntax cannot be used')
+  ) {
+    rawMessage =
+      `SAP rejected the object name — this typically means you are writing to a system-generated ` +
+      `L-prefix include (e.g. /DSN/L010BWE_01U01), which is read-only. ` +
+      `Write to the parent function module instead using type=FUGR/FF with the fugr parameter.`;
+  }
+
+  const msg = rawMessage.toLowerCase();
+  // AdtErrorException (from the abap-adt-api library) stores the HTTP status code in .err,
+  // NOT in .response.status — .response is often undefined on these exceptions.
+  // We also check .response?.status for any other error shapes that do set it.
+  //
+  // Fallback: some error shapes lose the numeric status entirely (the library re-wraps the
+  // axios error as a plain Error whose message is "Error: Request failed with status code 400").
+  // Parse the status out of the message text so classification (esp. isAmbiguous400) still works.
+  // Without this, hundreds of bare-400 session drops surface as raw "status code 400" with no
+  // re-login attempt — observed ~634× in the production error log.
+  let status: number | undefined =
+    error?.response?.status ??
+    (typeof error?.err === 'number' ? error.err : undefined);
+  const statusMatch = rawMessage.match(/status code (\d{3})/i) || rawMessage.match(/\bHTTP (\d{3})\b/);
+  const messageStatus = statusMatch ? Number(statusMatch[1]) : undefined;
+  if (status === undefined) {
+    status = messageStatus;
+  } else if (status === 500 && messageStatus !== undefined && messageStatus !== 500 && !error?.response) {
+    // abap-adt-api's fromError/fromException wrap failures they don't recognize as
+    // AdtErrorException(500, ...) — a hardcoded 500 with the real HTTP status surviving
+    // only in the message text ("Error: Request failed with status code 400"). Observed
+    // ~350×/10 days in prod: bare 400s logged as 500s, skipping the ambiguous-400
+    // re-login path entirely. When the numeric status is that wrapper's 500, there is
+    // no response object, and the message names a different status — trust the message.
+    status = messageStatus;
+  }
+
+  // A 400 on basic read operations (get_source, abap_table, abap_search) often means
+  // the session cookie has expired — SAP returns 400 instead of 401 in this case.
+  // We detect this by checking for 400 with no meaningful error message (empty or generic).
+  // Legitimate 400s (bad search pattern, missing param) have descriptive messages.
+  // The library's simpleError() produces "Error 400:Bad Request" (or "Error 400:Session timed out")
+  // when SAP returns a 400 with no meaningful body. The standard axios message "Request failed
+  // with status code 400" also appears in some paths.
+  const isAmbiguous400 =
+    status === 400 &&
+    (rawMessage === 'Unknown error' ||
+      rawMessage.includes('status code 400') ||
+      rawMessage.includes('HTTP 400 with no error detail') || // our own formatError output, re-parsed by index.ts for log classification
+      rawMessage.includes('Session expired and re-login failed') || // withSession's terminal McpError, ditto
+      rawMessage.trim() === '' ||
+      rawMessage === 'Bad Request' ||
+      /^Error 400:/i.test(rawMessage) ||   // AdtErrorException from simpleError: "Error 400:Bad Request"
+      msg.includes('csrf') ||              // CSRF token expired/invalid — always a session issue
+      msg.includes('logon required') ||
+      msg.includes('reauthentication'));   // SAP re-auth prompts on expired sessions
+
+  return {
+    message: rawMessage,
+    isSessionTimeout:
+      msg.includes('session timed out') ||
+      msg.includes('session not found') ||
+      msg.includes('not logged on') ||
+      status === 401 ||
+      isAmbiguous400,
+    isUpgradeMode:
+      msg.includes('adjustment mode') ||
+      msg.includes('in adjustment') ||
+      msg.includes('upgradeflag'),
+    isLocked:
+      // Transport-request locks (TK164: "Request X22K900123 is locked; action canceled").
+      // These are transient enqueue locks on the transport request itself — held briefly by
+      // the session that created/modified it, and they self-clear within seconds. They are
+      // RETRYABLE, but the object-lock phrases below don't match ("is locked" ≠ "already locked"),
+      // so without this clause the set_source/transport retry loops bail on the first hit.
+      /request\s+[a-z0-9]+\s+is locked/.test(msg) ||
+      (msg.includes('t100key-id=tk') && msg.includes('164')) ||
+      (
+        // Object locks: only true when another user/session holds the lock — not when a lock
+        // fails due to object state (inconsistent, syntax errors, etc.)
+        (msg.includes('already locked') ||
+         msg.includes('locked by user') ||
+         msg.includes('locked by another') ||
+         // 'enqueue' alone is too broad — SAP uses it in activation-error messages too.
+         // Only treat as a lock when enqueue failure implies another holder.
+         (msg.includes('enqueue') && (msg.includes('user') || msg.includes('another') || msg.includes('hold')))
+        ) &&
+        !msg.includes('inconsistent') &&
+        !msg.includes('syntax error') &&
+        !msg.includes('not active') &&
+        !msg.includes('inactive')
+      ),
+    isNotFound:
+      status === 404 ||
+      msg.includes('does not exist') ||
+      msg.includes('not found'),
+    isAmbiguous400,
+    isLockNotSupported:
+      status === 405 ||
+      msg.includes('method not allowed') ||
+      msg.includes('method not supported'),
+    httpStatus: status,
+  };
+}
+
+/**
+ * Format a user-facing error message, surfacing actionable context.
+ */
+export function formatError(operation: string, error: any): string {
+  const info = parseAdtError(error);
+
+  if (info.isUpgradeMode) {
+    return (
+      `${operation} failed: object is in SPAU adjustment mode (upgradeFlag=true). ` +
+      `This cannot be resolved via ADT — use SPAU_ENH in SAP GUI to clear the adjustment status first.`
+    );
+  }
+
+  // A 400 with no meaningful body is almost always a stale CSRF token caused by an expired or
+  // externally-killed session (SM04). withSession already attempted a re-login — if the error
+  // still reaches here the session state is genuinely broken. Call login() explicitly to reset.
+  if (info.isAmbiguous400) {
+    return (
+      `${operation} failed: HTTP 400 with no error detail. withSession already re-logged in and ` +
+      `retried once, so a dropped session has been ruled out. The likely cause is the request itself: ` +
+      `a non-existent object/name, a malformed query, or a path that is wrong for this object type — ` +
+      `verify those before assuming an auth problem. Do NOT loop on reconnecting.`
+    );
+  }
+
+  if (info.isLockNotSupported) {
+    return (
+      `${operation} failed: HTTP 405 — this object type does not support ADT HTTP locks. ` +
+      `DDIC-managed types (DDLS, DDLX, TABL, DTEL, DOMA, etc.) use internal enqueue locks. ` +
+      `The server will attempt a lockless write with transport assignment.`
+    );
+  }
+
+  if (info.isLocked) {
+    return (
+      `${operation} failed: object is locked by another user or session. ` +
+      `Check SM12 to see who holds the lock. ` +
+      `If SM12 is empty, the lock is a stale ADT enqueue entry from an expired session — ` +
+      `call login() to refresh the session (withSession will retry automatically), or use abap_unlock.`
+    );
+  }
+
+  // Lock attempt failed for a non-user-lock reason (inconsistency, syntax errors, etc.)
+  // Surface the actual SAP message so the agent doesn't go hunting for a phantom lock.
+  const msg = info.message.toLowerCase();
+  if (msg.includes('enqueue') || msg.includes('cannot be locked') || msg.includes('lock failed')) {
+    return (
+      `${operation} failed: lock was rejected — NOT a user/session lock. ` +
+      `SAP reason: ${info.message}. ` +
+      `Check if the object has syntax errors or is in an inconsistent state (run abap_syntax_check).`
+    );
+  }
+
+  if (info.isNotFound) {
+    return (
+      `${operation} failed: object not found. ` +
+      `Verify the name, type, and that the object exists on this system. ` +
+      `(${info.message})`
+    );
+  }
+
+  return `${operation} failed: ${info.message}`;
+}
+
+/**
+ * Enrich activation message objects with actionable hints.
+ * SAP returns messages like "Syntax error in program" with no guidance — add context.
+ */
+export function formatActivationMessages(messages: any[]): string {
+  if (!messages || messages.length === 0) return 'Activation failed — no error messages returned.';
+
+  return messages.map((m: any) => {
+    const type = m.type || 'E';
+    const raw = m.shortText || m.objDescr || m.text || JSON.stringify(m);
+    const text = typeof raw === 'string' ? raw : String(raw);
+    const lower = text.toLowerCase();
+
+    let hint = '';
+    if (lower.includes('syntax error') || lower.includes('program contains syntax')) {
+      hint = ' → Run abap_syntax_check to see the exact error location.';
+    } else if (lower.includes('inactive') || lower.includes('not active')) {
+      hint = ' → Activate the listed dependent objects first, then retry.';
+    } else if (lower.includes('cannot be used for an object name') || lower.includes('this syntax cannot')) {
+      hint = ' → This object type does not support direct source writes via this path. Check the object type is correct.';
+    } else if (lower.includes('unmasked') || lower.includes('string template')) {
+      hint = ' → Pipe characters (|) are ABAP string template delimiters. Escape literal pipes inside templates with \\|, or use CONCATENATE instead of string templates.';
+    } else if (lower.includes('locked')) {
+      hint = ' → Object is locked. Check SM12 for active locks.';
+    }
+
+    return `[${type}] ${text}${hint}`;
+  }).join('\n');
+}
